@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+// import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence, useAnimation } from 'framer-motion';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Text } from '@react-three/drei';
@@ -8,526 +8,706 @@ import { GiProcessor } from 'react-icons/gi';
 import { SiGooglegemini } from 'react-icons/si';
 import { MdClose } from 'react-icons/md';
 import { RiArrowLeftSLine, RiArrowRightSLine } from 'react-icons/ri';
-import React from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 // Enhanced AI Tutor Component
-const AITutor = ({ 
+import { FaMicrophone, FaStop, FaRegLightbulb, FaChartLine, FaCode } from 'react-icons/fa';
+import { MdSend } from 'react-icons/md';
+// import { MdClose} from 'react-icons/md';
+// import { SiGooglegemini } from 'react-icons/si';
+// import { motion } from 'framer-motion';
+// import { getRandomInt } from './utils'; // Assuming you have a utility function for random integers
+
+const AITutor = React.memo(({ 
   problemData, 
   currentStep, 
   onClose,
   isSpeaking,
   setIsSpeaking,
-  generateVisualization
+  generateVisualization,
+  modifyVisualization,
+  setCurrentStep
 }) => {
-  const [tutorMessages, setTutorMessages] = useState([]);
-  const [isTyping, setIsTyping] = useState(false);
+  const [messages, setMessages] = useState([]);
   const [userInput, setUserInput] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [activeTab, setActiveTab] = useState('chat');
+  const [showThinking, setShowThinking] = useState(false);
+  const [conversationId, setConversationId] = useState(Date.now().toString());
+  const [sessionStartTime] = useState(new Date());
+  
   const messagesEndRef = useRef(null);
+  const speechSynthesisRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const thinkingTimeoutRef = useRef(null);
+  const geminiStreamRef = useRef(null);
 
-  // Enhanced tutor responses with more detailed explanations
-  const tutorResponses = {
-    initial: [
-      {
-        text: `Hello! I'm your Algorithm Tutor. Let's explore ${problemData?.title || 'this algorithm'} together!`,
-        details: "I can explain each step, analyze time complexity, provide examples, and even generate new visualizations based on your questions."
-      },
-      {
-        text: `This algorithm is categorized as: ${problemData?.category || 'General'}`,
-        details: `The ${problemData?.category} category means we're working with ${getCategoryDescription(problemData?.category)}.`
-      },
-      {
-        text: `Time complexity: ${problemData?.timeComplexity?.average || 'Not specified'}`,
-        details: `This means the algorithm's performance scales as ${problemData?.timeComplexity?.average} with input size.`
-      },
-      "What would you like me to explain in more detail? You can ask about:",
-      "- Specific steps in the algorithm",
-      "- Time complexity analysis",
-      "- How to optimize the approach",
-      "- Real-world applications",
-      "- Or request a new visualization with different inputs"
-    ],
-    binarySearch: [
-      {
-        text: "Binary search works by repeatedly dividing the search interval in half.",
-        details: "At each step, the algorithm compares the middle element of the interval with the target value. If they're not equal, it eliminates half of the remaining elements based on whether the target is smaller or larger than the middle element."
-      },
-      {
-        text: "It's much faster than linear search - O(log n) vs O(n)!",
-        details: "This logarithmic complexity comes from halving the search space at each step. For an array of size 1,000,000, binary search would need at most 20 comparisons compared to 1,000,000 for linear search."
-      },
-      {
-        text: "Notice how the pointers move to eliminate half the remaining elements each time.",
-        details: "The left and right pointers define the current search space. The mid pointer shows where we're checking. Watch how they converge toward the target."
-      }
-    ],
-    quickSort: [
-      {
-        text: "QuickSort is a divide-and-conquer algorithm that partitions the array.",
-        details: "It selects a 'pivot' element and partitions the array into elements less than the pivot and elements greater than the pivot. This partitioning is done in linear time."
-      },
-      {
-        text: "The pivot element is crucial - ideally it should be the median.",
-        details: "Choosing a good pivot (like the median) ensures balanced partitions. A bad pivot choice (like always using the first element) can lead to O(n²) worst-case performance."
-      },
-      {
-        text: "Watch how elements are swapped around the pivot point.",
-        details: "The partitioning process maintains two pointers that move toward each other, swapping elements that are on the wrong side of the pivot."
-      }
-    ],
-    bfs: [
-      {
-        text: "BFS explores all neighbor nodes at the present depth before moving deeper.",
-        details: "It uses a queue to keep track of nodes to visit next, ensuring we visit nodes level by level. This makes it ideal for finding shortest paths in unweighted graphs."
-      },
-      {
-        text: "It uses a queue to keep track of nodes to visit next.",
-        details: "The queue ensures we process nodes in the order we discover them (FIFO). This is what gives BFS its characteristic level-by-level exploration."
-      },
-      {
-        text: "Notice how it systematically explores level by level.",
-        details: "In the visualization, you can see how all nodes at distance k from the source are visited before any nodes at distance k+1."
-      }
-    ],
-    default: [
-      {
-        text: "This step shows an important part of the algorithm's operation.",
-        details: "Let me walk you through what's happening here and why it's significant for the algorithm's overall performance."
-      },
-      {
-        text: "Notice how the data structure is being manipulated here.",
-        details: "The way we're modifying the data structure in this step is key to achieving the algorithm's efficiency. Watch how the changes affect subsequent steps."
-      },
-      {
-        text: "The time complexity at this stage is particularly interesting.",
-        details: "This step contributes significantly to the overall complexity. The operations here are what make the algorithm's performance characteristics what they are."
-      }
-    ]
-  };
+  // API Configuration
+  const API_KEY = import.meta.env.VITE_API_KEY;
+  const MODEL_NAME = 'gemini-1.5-pro';
+  const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent`;
 
-  // Helper function to get category descriptions
-  function getCategoryDescription(category) {
-    const descriptions = {
-      'Array': 'a linear data structure with contiguous memory allocation',
-      'Tree': 'a hierarchical data structure with nodes and edges',
-      'Graph': 'a collection of nodes connected by edges, which can be directed or undirected',
-      'LinkedList': 'a linear data structure where elements are linked using pointers',
-      'HashTable': 'a data structure that implements an associative array using hash functions',
-      'Recursion': 'a method where the solution depends on solutions to smaller instances of the same problem'
-    };
-    return descriptions[category] || 'this type of data structure';
-  }
+  // Initialize the conversation with algorithm context
+  useEffect(() => {
+    if (problemData) {
+      const initialContext = {
+        role: 'system',
+        content: `You are an expert computer science tutor specializing in algorithm visualization. 
+        The user is currently working with the ${problemData.title} algorithm (${problemData.category} category).
+        Key details:
+        - Description: ${problemData.description}
+        - Time Complexity: ${JSON.stringify(problemData.timeComplexity)}
+        - Current Step: ${currentStep + 1}/${problemData.steps.length} - ${problemData.steps[currentStep]?.description}
+        
+        Your task is to:
+        1. Explain algorithm concepts clearly with concrete examples
+        2. Answer questions about time/space complexity
+        3. Help modify visualizations with specific parameters
+        4. Guide through debugging thought processes
+        5. Suggest optimizations and alternative approaches
+        
+        Respond conversationally but precisely. When suggesting visualization changes, provide exact parameters.`
+      };
+      
+      setMessages([initialContext, ...getInitialMessages()]);
+      startNewConversation();
+    }
+  }, [problemData, currentStep]);
 
   // Scroll to bottom of messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [tutorMessages]);
+  }, [messages]);
 
-  // Generate initial tutor messages when problem data loads
+  // Handle speech synthesis
   useEffect(() => {
-    if (problemData) {
-      setIsTyping(true);
-      setTimeout(() => {
-        setTutorMessages([
-          ...tutorResponses.initial.map(msg => typeof msg === 'string' ? 
-            { text: msg, fromUser: false } : 
-            { text: msg.text, details: msg.details, fromUser: false }
-          )
-        ]);
-        setIsTyping(false);
-      }, 1000);
-    }
-  }, [problemData]);
-
-  // Generate step-specific explanations
-  useEffect(() => {
-    if (problemData && currentStep >= 0) {
-      const step = problemData.steps[currentStep];
-      const algoType = problemData.title.toLowerCase();
-      
-      let responses = [];
-      
-      if (algoType.includes('binary search')) {
-        responses = tutorResponses.binarySearch;
-      } else if (algoType.includes('quick') || algoType.includes('sort')) {
-        responses = tutorResponses.quickSort;
-      } else if (algoType.includes('bfs') || algoType.includes('breadth')) {
-        responses = tutorResponses.bfs;
-      } else {
-        responses = tutorResponses.default;
-      }
-      
-      setIsTyping(true);
-      setTimeout(() => {
-        const randomResponse = responses[Math.floor(Math.random() * responses.length)];
-        setTutorMessages(prev => [
-          ...prev,
-          { 
-            text: `Step ${currentStep + 1}: ${step.description}`,
-            fromUser: false 
-          },
-          typeof randomResponse === 'string' ? 
-            { text: randomResponse, fromUser: false } :
-            { 
-              text: randomResponse.text, 
-              details: randomResponse.details,
-              fromUser: false 
-            }
-        ]);
-        setIsTyping(false);
-      }, 1500);
-    }
-  }, [currentStep, problemData]);
-
-  // Handle user queries
-  const handleUserQuery = (e) => {
-    e.preventDefault();
-    if (!userInput.trim()) return;
-
-    const query = userInput;
-    setTutorMessages(prev => [...prev, { text: query, fromUser: true }]);
-    setUserInput('');
-    setIsTyping(true);
-    
-    // Process different types of queries
-    setTimeout(() => {
-      if (query.toLowerCase().includes('time complexity')) {
-        handleTimeComplexityQuery();
-      } else if (query.toLowerCase().includes('example') || query.toLowerCase().includes('sample')) {
-        handleExampleQuery();
-      } else if (query.toLowerCase().includes('optimiz') || query.toLowerCase().includes('improve')) {
-        handleOptimizationQuery();
-      } else if (query.toLowerCase().includes('visualiz') || query.toLowerCase().includes('show me')) {
-        handleVisualizationRequest(query);
-      } else {
-        handleGeneralQuery(query);
-      }
-    }, 1000);
-  };
-
-  const handleTimeComplexityQuery = () => {
-    setTutorMessages(prev => [
-      ...prev,
-      { 
-        text: `Let me analyze the time complexity of ${problemData.title}:`,
-        fromUser: false 
-      },
-      { 
-        text: `Best Case: ${problemData.timeComplexity.best}`,
-        details: getComplexityExplanation(problemData.timeComplexity.best, 'best'),
-        fromUser: false 
-      },
-      { 
-        text: `Average Case: ${problemData.timeComplexity.average}`,
-        details: getComplexityExplanation(problemData.timeComplexity.average, 'average'),
-        fromUser: false 
-      },
-      { 
-        text: `Worst Case: ${problemData.timeComplexity.worst}`,
-        details: getComplexityExplanation(problemData.timeComplexity.worst, 'worst'),
-        fromUser: false 
-      },
-      { 
-        text: `Space Complexity: ${problemData.timeComplexity.space}`,
-        details: getComplexityExplanation(problemData.timeComplexity.space, 'space'),
-        fromUser: false 
-      }
-    ]);
-    setIsTyping(false);
-  };
-
-  const getComplexityExplanation = (complexity, type) => {
-    const explanations = {
-      'O(1)': 'Constant time - the runtime doesn\'t depend on input size',
-      'O(log n)': 'Logarithmic time - the runtime grows logarithmically with input size',
-      'O(n)': 'Linear time - the runtime grows proportionally with input size',
-      'O(n log n)': 'Linearithmic time - common in efficient sorting algorithms',
-      'O(n²)': 'Quadratic time - the runtime grows with the square of input size',
-      'O(2^n)': 'Exponential time - the runtime doubles with each addition to input'
-    };
-    
-    const typeContext = {
-      'best': 'This is the most favorable scenario where the algorithm performs at its fastest.',
-      'average': 'This is the expected performance under typical conditions.',
-      'worst': 'This is the scenario where the algorithm performs at its slowest.',
-      'space': 'This measures how much additional memory the algorithm needs.'
-    };
-    
-    return `${typeContext[type] || ''} ${explanations[complexity] || 'This complexity indicates...'}`;
-  };
-
-  const handleExampleQuery = () => {
-    const examples = {
-      'Binary Search': [
-        { input: '[1, 3, 5, 7, 9, 11, 13], target: 7', output: '3 (index of 7)' },
-        { input: '[2, 4, 6, 8, 10], target: 5', output: '-1 (not found)' }
-      ],
-      'Quick Sort': [
-        { input: '[10, 80, 30, 90, 40, 50, 70]', output: '[10, 30, 40, 50, 70, 80, 90]' },
-        { input: '[5, 1, 8, 3, 2]', output: '[1, 2, 3, 5, 8]' }
-      ],
-      'BFS': [
-        { input: 'Graph with nodes A-B-C, start at A', output: 'Visits A, then B, then C' },
-        { input: 'Tree with root 1, children 2 and 3', output: 'Visits 1, then 2, then 3' }
-      ]
-    };
-    
-    const algoExamples = examples[problemData.title] || [
-      { input: 'Sample input', output: 'Expected output' }
-    ];
-    
-    setTutorMessages(prev => [
-      ...prev,
-      { 
-        text: `Here are some examples for ${problemData.title}:`,
-        fromUser: false 
-      },
-      ...algoExamples.map(example => ({
-        text: `Input: ${example.input}\nOutput: ${example.output}`,
-        fromUser: false
-      })),
-      { 
-        text: "Would you like me to generate a visualization for any of these examples?",
-        fromUser: false 
-      }
-    ]);
-    setIsTyping(false);
-  };
-
-  const handleOptimizationQuery = () => {
-    const optimizations = {
-      'Binary Search': [
-        "Ensure the input array is always sorted",
-        "Use mid = low + (high-low)/2 to avoid integer overflow",
-        "Consider interpolation search for uniformly distributed data"
-      ],
-      'Quick Sort': [
-        "Use median-of-three for better pivot selection",
-        "Switch to insertion sort for small subarrays",
-        "Implement tail recursion optimization"
-      ],
-      'BFS': [
-        "Use a visited set to avoid cycles in graphs",
-        "For shortest path, stop when you reach the target",
-        "Use bidirectional BFS for further optimization"
-      ]
-    };
-    
-    const algoOptimizations = optimizations[problemData.title] || [
-      "Analyze your specific use case for potential optimizations",
-      "Consider alternative data structures that might be more efficient",
-      "Look for ways to reduce unnecessary computations"
-    ];
-    
-    setTutorMessages(prev => [
-      ...prev,
-      { 
-        text: `Here are some optimization tips for ${problemData.title}:`,
-        fromUser: false 
-      },
-      ...algoOptimizations.map(tip => ({
-        text: `• ${tip}`,
-        fromUser: false
-      })),
-      { 
-        text: "Would you like me to explain any of these in more detail?",
-        fromUser: false 
-      }
-    ]);
-    setIsTyping(false);
-  };
-
-  const handleVisualizationRequest = (query) => {
-    // Extract potential parameters from the query
-    const sizeMatch = query.match(/size (\d+)/i);
-    const valuesMatch = query.match(/values? ([0-9,\s]+)/i);
-    
-    let response = {
-      text: "I can generate a new visualization with different parameters.",
-      fromUser: false
-    };
-    
-    if (sizeMatch || valuesMatch) {
-      const size = sizeMatch ? parseInt(sizeMatch[1]) : 10;
-      const values = valuesMatch ? 
-        valuesMatch[1].split(',').map(v => parseInt(v.trim())) : 
-        Array.from({length: size}, () => Math.floor(Math.random() * 100));
-      
-      response.text = `Generating new visualization with values: ${values.join(', ')}`;
-      
-      // Generate new visualization after a delay
-      setTimeout(() => {
-        generateVisualization(`Visualize ${problemData.title} with array [${values.join(', ')}]`);
-      }, 2000);
-    } else {
-      response.text = "What specific visualization would you like to see? You can say things like:";
-      response.details = [
-        "- 'Show me with array size 20'",
-        "- 'Visualize with values 5, 10, 15, 20'",
-        "- 'Generate a larger example'"
-      ].join('\n');
-    }
-    
-    setTutorMessages(prev => [...prev, response]);
-    setIsTyping(false);
-  };
-
-  const handleGeneralQuery = (query) => {
-    const responses = [
-      {
-        text: "That's an excellent question about this algorithm!",
-        details: `Regarding "${query}", in the context of ${problemData.title}, here's what's happening: The algorithm ${problemData.steps[currentStep].description.toLowerCase()} This is important because...`
-      },
-      {
-        text: "I'm glad you asked about that aspect!",
-        details: `In ${problemData.title}, this relates to how the algorithm manages ${problemData.category.toLowerCase()} data structures. The current step shows ${problemData.steps[currentStep].description.toLowerCase()} which is key to understanding ${problemData.title}.`
-      },
-      {
-        text: "Interesting point! Let me explain how this works...",
-        details: `The algorithm handles this by ${getRandomAlgorithmDetail()}. This connects to the broader concept of ${getRandomCSConcept()} which is fundamental to many algorithms.`
-      }
-    ];
-    
-    const randomResponse = responses[Math.floor(Math.random() * responses.length)];
-    
-    setTutorMessages(prev => [
-      ...prev,
-      { 
-        text: randomResponse.text,
-        details: randomResponse.details,
-        fromUser: false 
-      }
-    ]);
-    setIsTyping(false);
-  };
-
-  const getRandomAlgorithmDetail = () => {
-    const details = [
-      "dividing the problem into smaller subproblems",
-      "using efficient data structures to organize information",
-      "making locally optimal choices at each step",
-      "exploiting problem structure to reduce computations",
-      "systematically exploring possible solutions"
-    ];
-    return details[Math.floor(Math.random() * details.length)];
-  };
-
-  const getRandomCSConcept = () => {
-    const concepts = [
-      "divide and conquer",
-      "dynamic programming",
-      "greedy algorithms",
-      "graph theory",
-      "recursion",
-      "backtracking",
-      "space-time tradeoffs"
-    ];
-    return concepts[Math.floor(Math.random() * concepts.length)];
-  };
-
-  // Toggle speech synthesis
-  const toggleSpeech = () => {
     if (isSpeaking) {
-      window.speechSynthesis.cancel();
-      setIsSpeaking(false);
+      speakMessages();
     } else {
-      setIsSpeaking(true);
-      tutorMessages.forEach(msg => {
-        if (!msg.fromUser) {
-          const utterance = new SpeechSynthesisUtterance(msg.text + (msg.details ? '. ' + msg.details : ''));
-          utterance.rate = 0.9;
-          window.speechSynthesis.speak(utterance);
-        }
-      });
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
     }
+  }, [isSpeaking, messages]);
+
+  // Clean up on unmount
+  useEffect(() => {
+    return () => {
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      if (geminiStreamRef.current) {
+        geminiStreamRef.current.abort();
+      }
+      if (thinkingTimeoutRef.current) {
+        clearTimeout(thinkingTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const getInitialMessages = useCallback(() => {
+    return [
+      {
+        role: 'assistant',
+        content: `Hello! I'm your AI Algorithm Tutor. Let's explore ${problemData?.title || 'this algorithm'} together.`,
+        metadata: {
+          type: 'greeting',
+          timestamp: new Date().toISOString()
+        }
+      },
+      {
+        role: 'assistant',
+        content: `This is a ${problemData?.difficulty || 'medium'} difficulty ${problemData?.category || 'algorithm'} problem.`,
+        metadata: {
+          type: 'context',
+          timestamp: new Date().toISOString()
+        }
+      },
+      {
+        role: 'assistant',
+        content: `At step ${currentStep + 1}: ${problemData?.steps[currentStep]?.description || 'Initializing algorithm'}`,
+        metadata: {
+          type: 'step-explanation',
+          timestamp: new Date().toISOString()
+        }
+      },
+      {
+        role: 'assistant',
+        content: "What would you like me to explain? You can ask about:\n- Specific algorithm steps\n- Time/space complexity\n- Optimizations\n- Real-world applications\n- Or request visualization changes",
+        metadata: {
+          type: 'prompt',
+          timestamp: new Date().toISOString()
+        }
+      }
+    ];
+  }, [problemData, currentStep]);
+
+  const startNewConversation = () => {
+    setConversationId(Date.now().toString());
+  };
+
+  const speakMessages = () => {
+    if (!window.speechSynthesis) return;
+
+    // Cancel any ongoing speech
+    window.speechSynthesis.cancel();
+
+    // Filter only assistant messages that haven't been spoken yet
+    const messagesToSpeak = messages
+      .filter(msg => msg.role === 'assistant' && !msg.metadata.spoken)
+      .map(msg => ({
+        ...msg,
+        metadata: { ...msg.metadata, spoken: true }
+      }));
+
+    if (messagesToSpeak.length === 0) return;
+
+    // Create utterances
+    const utterances = messagesToSpeak.map(msg => {
+      const utterance = new SpeechSynthesisUtterance(msg.content);
+      utterance.rate = 0.9;
+      utterance.pitch = 1;
+      utterance.voice = window.speechSynthesis.getVoices().find(v => v.name.includes('Google'));
+      return utterance;
+    });
+
+    // Speak sequentially
+    const speakNext = (index = 0) => {
+      if (index < utterances.length) {
+        utterances[index].onend = () => speakNext(index + 1);
+        window.speechSynthesis.speak(utterances[index]);
+        speechSynthesisRef.current = utterances[index];
+      }
+    };
+
+    speakNext();
+  };
+
+  const toggleSpeech = () => {
+    setIsSpeaking(prev => !prev);
+  };
+
+  const startVoiceInput = () => {
+    if (!('webkitSpeechRecognition' in window)) {
+      alert('Speech recognition not supported in your browser');
+      return;
+    }
+
+    recognitionRef.current = new window.webkitSpeechRecognition();
+    recognitionRef.current.continuous = false;
+    recognitionRef.current.interimResults = false;
+    recognitionRef.current.lang = 'en-US';
+
+    recognitionRef.current.onstart = () => {
+      setIsListening(true);
+    };
+
+    recognitionRef.current.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      setUserInput(transcript);
+      setIsListening(false);
+    };
+
+    recognitionRef.current.onerror = (event) => {
+      console.error('Speech recognition error', event.error);
+      setIsListening(false);
+    };
+
+    recognitionRef.current.onend = () => {
+      setIsListening(false);
+    };
+
+    recognitionRef.current.start();
+  };
+
+  const showThinkingAnimation = () => {
+    setShowThinking(true);
+    thinkingTimeoutRef.current = setTimeout(() => {
+      setShowThinking(false);
+    }, 2000);
+  };
+
+  const queryGemini = async (prompt) => {
+    if (geminiStreamRef.current) {
+      geminiStreamRef.current.abort();
+    }
+
+    showThinkingAnimation();
+    setIsTyping(true);
+
+    try {
+      const response = await fetch(`${API_URL}?key=${API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            role: 'user',
+            parts: [{ text: prompt }]
+          }],
+          generationConfig: {
+            temperature: 0.7,
+            topK: 40,
+            topP: 0.95,
+            maxOutputTokens: 2048
+          },
+          safetySettings: [
+            {
+              category: 'HARM_CATEGORY_HARASSMENT',
+              threshold: 'BLOCK_MEDIUM_AND_ABOVE'
+            },
+            {
+              category: 'HARM_CATEGORY_HATE_SPEECH',
+              threshold: 'BLOCK_MEDIUM_AND_ABOVE'
+            },
+            {
+              category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+              threshold: 'BLOCK_MEDIUM_AND_ABOVE'
+            },
+            {
+              category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+              threshold: 'BLOCK_MEDIUM_AND_ABOVE'
+            }
+          ]
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`API request failed with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      const responseText = data.candidates[0].content.parts[0].text;
+
+      // Parse response for special commands
+      if (responseText.includes('[[VISUALIZE]]')) {
+        const visualizationParams = responseText.match(/\[\[VISUALIZE\]\](.*?)\[\[\/VISUALIZE\]\]/s)[1].trim();
+        handleVisualizationCommand(visualizationParams);
+      } else if (responseText.includes('[[STEP]]')) {
+        const stepNumber = parseInt(responseText.match(/\[\[STEP\]\](\d+)\[\[\/STEP\]\]/)[1]);
+        handleStepChangeCommand(stepNumber);
+      } else {
+        setMessages(prev => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: responseText,
+            metadata: {
+              type: 'response',
+              timestamp: new Date().toISOString(),
+              sources: ['Gemini AI']
+            }
+          }
+        ]);
+      }
+    } catch (error) {
+      console.error('Error querying Gemini:', error);
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: 'Sorry, I encountered an error processing your request. Please try again.',
+          metadata: {
+            type: 'error',
+            timestamp: new Date().toISOString()
+          }
+        }
+      ]);
+    } finally {
+      setIsTyping(false);
+      setShowThinking(false);
+    }
+  };
+
+  const handleVisualizationCommand = (params) => {
+    // Parse visualization parameters from AI response
+    const sizeMatch = params.match(/size (\d+)/i);
+    const valuesMatch = params.match(/values? ([0-9,\s]+)/i);
+    
+    let newValues = [];
+    
+    if (valuesMatch) {
+      newValues = valuesMatch[1].split(',').map(v => parseInt(v.trim()));
+    } else if (sizeMatch) {
+      const size = parseInt(sizeMatch[1]);
+      newValues = Array.from({length: size}, () => Math.floor(Math.random() * 100));
+    }
+    
+    if (newValues.length > 0) {
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: `Generating new visualization with values: ${newValues.join(', ')}`,
+          metadata: {
+            type: 'visualization-change',
+            timestamp: new Date().toISOString(),
+            action: 'generate'
+          }
+        }
+      ]);
+      
+      modifyVisualization(newValues);
+    }
+  };
+
+  const handleStepChangeCommand = (stepNumber) => {
+    const validStep = Math.min(Math.max(0, stepNumber - 1), problemData.steps.length - 1);
+    setMessages(prev => [
+      ...prev,
+      {
+        role: 'assistant',
+        content: `Moving to step ${validStep + 1}: ${problemData.steps[validStep]?.description || 'No description available'}`,
+        metadata: {
+          type: 'step-change',
+          timestamp: new Date().toISOString(),
+          action: 'navigate'
+        }
+      }
+    ]);
+    setCurrentStep(validStep);
+  };
+
+  const handleUserMessage = async (e) => {
+    e.preventDefault();
+    if (!userInput.trim() || isTyping) return;
+
+    const userMessage = {
+      role: 'user',
+      content: userInput,
+      metadata: {
+        type: 'query',
+        timestamp: new Date().toISOString()
+      }
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setUserInput('');
+    
+    // Process the message
+    await processUserMessage(userInput);
+  };
+
+  const processUserMessage = async (message) => {
+    // Check for direct commands first
+    if (message.toLowerCase().includes('visualize with')) {
+      const params = message.replace(/visualize with/gi, '').trim();
+      modifyVisualization(params);
+      return;
+    }
+    
+    if (message.toLowerCase().includes('go to step')) {
+      const stepMatch = message.match(/go to step (\d+)/i);
+      if (stepMatch) {
+        const stepNumber = parseInt(stepMatch[1]);
+        handleStepChangeCommand(stepNumber);
+      }
+      return;
+    }
+
+    // Otherwise query Gemini
+    const context = [
+      `Current Algorithm: ${problemData.title}`,
+      `Current Step: ${currentStep + 1} of ${problemData.steps.length}`,
+      `Step Description: ${problemData.steps[currentStep]?.description || 'None'}`,
+      `Time Complexity: ${JSON.stringify(problemData.timeComplexity)}`,
+      `User Query: ${message}`
+    ].join('\n');
+
+    await queryGemini(context);
+  };
+
+  const handleQuickAction = (action) => {
+    let message = '';
+    switch (action) {
+      case 'explain-step':
+        message = `Explain the current step (${currentStep + 1}) in detail, focusing on how it contributes to the overall algorithm.`;
+        break;
+      case 'time-complexity':
+        message = `Analyze the time complexity of ${problemData.title}, explaining both the best and worst cases with examples.`;
+        break;
+      case 'optimize':
+        message = `Suggest optimizations for ${problemData.title} and explain how they would improve performance.`;
+        break;
+      case 'visualize':
+        message = `Suggest a new visualization for ${problemData.title} with different parameters that would help understand it better.`;
+        break;
+      default:
+        return;
+    }
+    
+    setUserInput(message);
+  };
+
+  const formatMessageContent = (content) => {
+    // Convert markdown-like syntax to HTML
+    return content
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // bold
+      .replace(/\*(.*?)\*/g, '<em>$1</em>') // italic
+      .replace(/`(.*?)`/g, '<code>$1</code>') // code
+      .replace(/\n/g, '<br/>'); // line breaks
   };
 
   return (
     <motion.div 
-      className="fixed bottom-4 right-4 w-80 bg-gray-800 rounded-lg shadow-xl z-50 overflow-hidden"
+      className="fixed bottom-4 right-4 w-96 bg-gray-800 rounded-lg shadow-xl z-50 overflow-hidden border border-gray-700"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 20 }}
+      transition={{ type: 'spring', damping: 25 }}
     >
-      <div className="bg-blue-600 p-3 flex justify-between items-center">
-        <div className="flex items-center">
-          <FaRobot className="mr-2" />
-          <h3 className="font-semibold">Algorithm Tutor</h3>
+      {/* Header */}
+      <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-3 flex justify-between items-center">
+        <div className="flex items-center space-x-2">
+          <SiGooglegemini className="text-yellow-300 text-lg" />
+          <div>
+            <h3 className="font-semibold">AI Algorithm Tutor</h3>
+            <div className="text-xs opacity-80 flex items-center">
+              <span className="w-2 h-2 rounded-full bg-green-400 mr-1"></span>
+              {problemData?.title || 'Algorithm Analysis'}
+            </div>
+          </div>
         </div>
         <div className="flex space-x-2">
           <button 
             onClick={toggleSpeech}
-            className={`p-1 rounded-full ${isSpeaking ? 'bg-blue-700' : 'bg-blue-800'}`}
+            className={`p-2 rounded-full ${isSpeaking ? 'bg-blue-700' : 'bg-blue-800 hover:bg-blue-700'} transition-colors`}
             title={isSpeaking ? 'Stop speaking' : 'Start speaking'}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.586 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.586l3.707-3.707a1 1 0 011.09-.217zM14.657 2.929a1 1 0 011.414 0A9.972 9.972 0 0119 10a9.972 9.972 0 01-2.929 7.071 1 1 0 01-1.414-1.414A7.971 7.971 0 0017 10c0-2.21-.894-4.208-2.343-5.657a1 1 0 010-1.414zm-2.829 2.828a1 1 0 011.415 0A5.983 5.983 0 0115 10a5.984 5.984 0 01-1.757 4.243 1 1 0 01-1.415-1.415A3.984 3.984 0 0013 10a3.983 3.983 0 00-1.172-2.828 1 1 0 010-1.415z" clipRule="evenodd" />
-            </svg>
+            {isSpeaking ? <FaStop size={14} /> : <FaMicrophone size={14} />}
           </button>
-          <button onClick={onClose} className="p-1 rounded-full bg-blue-800">
-            <MdClose className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-      
-      <div className="h-64 overflow-y-auto p-3 space-y-3">
-        {tutorMessages.map((message, index) => (
-          <motion.div
-            key={index}
-            className={`p-2 rounded-lg max-w-xs ${message.fromUser ? 'ml-auto bg-blue-600' : 'mr-auto bg-gray-700'}`}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2 }}
-          >
-            <div className="whitespace-pre-wrap">{message.text}</div>
-            {message.details && (
-              <motion.div
-                className="mt-1 pt-1 border-t border-gray-600 text-xs text-gray-300 whitespace-pre-wrap"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-              >
-                {message.details}
-              </motion.div>
-            )}
-          </motion.div>
-        ))}
-        {isTyping && (
-          <motion.div
-            className="p-2 rounded-lg max-w-xs mr-auto bg-gray-700"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-          >
-            <div className="flex space-x-1">
-              <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce"></div>
-              <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-              <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '0.4s' }}></div>
-            </div>
-          </motion.div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
-      
-      <div className="p-3 border-t border-gray-700">
-        <form onSubmit={handleUserQuery} className="flex">
-          <input
-            value={userInput}
-            onChange={(e) => setUserInput(e.target.value)}
-            type="text"
-            placeholder="Ask about the algorithm..."
-            className="flex-1 bg-gray-700 rounded-l-lg p-2 text-sm focus:outline-none"
-          />
           <button 
-            type="submit"
-            className="bg-blue-600 hover:bg-blue-700 px-3 rounded-r-lg"
+            onClick={onClose}
+            className="p-2 rounded-full bg-blue-800 hover:bg-blue-700 transition-colors"
+            title="Close tutor"
           >
-            Send
+            <MdClose size={16} />
           </button>
-        </form>
-        <div className="text-xs text-gray-400 mt-1">
-          Try: "Explain time complexity", "Show an example", or "Visualize with different values"
         </div>
+      </div>
+      
+      {/* Tabs */}
+      <div className="flex border-b border-gray-700">
+        <button
+          onClick={() => setActiveTab('chat')}
+          className={`flex-1 py-2 text-sm font-medium ${activeTab === 'chat' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400 hover:text-white'}`}
+        >
+          Discussion
+        </button>
+        <button
+          onClick={() => setActiveTab('actions')}
+          className={`flex-1 py-2 text-sm font-medium ${activeTab === 'actions' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400 hover:text-white'}`}
+        >
+          Quick Actions
+        </button>
+        <button
+          onClick={() => setActiveTab('context')}
+          className={`flex-1 py-2 text-sm font-medium ${activeTab === 'context' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400 hover:text-white'}`}
+        >
+          Algorithm Info
+        </button>
+      </div>
+      
+      {/* Content Area */}
+      <div className="h-96 flex flex-col">
+        {activeTab === 'chat' && (
+          <>
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {messages.filter(m => m.role !== 'system').map((message, index) => (
+                <motion.div
+                  key={`${conversationId}-${index}`}
+                  className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <div
+                    className={`max-w-xs md:max-w-md rounded-lg p-3 ${message.role === 'user' 
+                      ? 'bg-blue-600 rounded-br-none' 
+                      : 'bg-gray-700 rounded-bl-none'}`}
+                  >
+                    {message.role === 'assistant' && (
+                      <div className="flex items-center mb-1">
+                        <FaRobot className="mr-2 text-purple-300" size={12} />
+                        <span className="text-xs text-gray-300">AI Tutor</span>
+                      </div>
+                    )}
+                    <div 
+                      className="whitespace-pre-wrap"
+                      dangerouslySetInnerHTML={{ __html: formatMessageContent(message.content) }}
+                    />
+                    {message.metadata?.sources && (
+                      <div className="mt-2 pt-2 border-t border-gray-600 text-xs text-gray-400">
+                        Sources: {message.metadata.sources.join(', ')}
+                      </div>
+                    )}
+                    <div className="text-xs text-gray-400 mt-1">
+                      {new Date(message.metadata.timestamp).toLocaleTimeString()}
+                    </div>
+                  </div>
+                </motion.div>
+              ))}
+              
+              {showThinking && (
+                <motion.div
+                  className="flex justify-start"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                >
+                  <div className="bg-gray-700 rounded-lg rounded-bl-none p-3">
+                    <div className="flex items-center space-x-2">
+                      <div className="flex space-x-1">
+                        <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce"></div>
+                        <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                        <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+                      </div>
+                      <span className="text-xs text-gray-300">Thinking...</span>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+              
+              <div ref={messagesEndRef} />
+            </div>
+            
+            {/* Input Area */}
+            <div className="p-3 border-t border-gray-700 bg-gray-900">
+              <form onSubmit={handleUserMessage} className="flex space-x-2">
+                <div className="flex-1 relative">
+                  <input
+                    value={userInput}
+                    onChange={(e) => setUserInput(e.target.value)}
+                    type="text"
+                    placeholder="Ask about the algorithm..."
+                    className="w-full bg-gray-700 rounded-lg p-2 pr-10 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    disabled={isTyping}
+                  />
+                  <button
+                    type="button"
+                    onClick={startVoiceInput}
+                    className={`absolute right-2 top-2 text-gray-400 hover:text-white ${isListening ? 'text-red-400 animate-pulse' : ''}`}
+                    title="Voice input"
+                  >
+                    <FaMicrophone size={14} />
+                  </button>
+                </div>
+                <button 
+                  type="submit"
+                  className="bg-blue-600 hover:bg-blue-700 p-2 rounded-lg disabled:opacity-50 flex items-center justify-center"
+                  disabled={isTyping || !userInput.trim()}
+                >
+                  <MdSend size={18} />
+                </button>
+              </form>
+              <div className="text-xs text-gray-400 mt-1 px-1">
+                Try: "Explain this step", "Show complexity analysis", or "Visualize with different values"
+              </div>
+            </div>
+          </>
+        )}
+        
+        {activeTab === 'actions' && (
+          <div className="p-4 overflow-y-auto">
+            <h4 className="text-sm font-semibold text-blue-300 mb-3">Quick Actions</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => handleQuickAction('explain-step')}
+                className="bg-gray-700 hover:bg-gray-600 p-3 rounded-lg flex flex-col items-center text-center"
+              >
+                <FaRegLightbulb className="text-yellow-400 mb-1" size={18} />
+                <span className="text-xs">Explain Current Step</span>
+              </button>
+              <button
+                onClick={() => handleQuickAction('time-complexity')}
+                className="bg-gray-700 hover:bg-gray-600 p-3 rounded-lg flex flex-col items-center text-center"
+              >
+                <FaChartLine className="text-green-400 mb-1" size={18} />
+                <span className="text-xs">Time Complexity</span>
+              </button>
+              <button
+                onClick={() => handleQuickAction('optimize')}
+                className="bg-gray-700 hover:bg-gray-600 p-3 rounded-lg flex flex-col items-center text-center"
+              >
+                <FaRegLightbulb className="text-blue-400 mb-1" size={18} />
+                <span className="text-xs">Optimization Tips</span>
+              </button>
+              <button
+                onClick={() => handleQuickAction('visualize')}
+                className="bg-gray-700 hover:bg-gray-600 p-3 rounded-lg flex flex-col items-center text-center"
+              >
+                <FaCode className="text-purple-400 mb-1" size={18} />
+                <span className="text-xs">Modify Visualization</span>
+              </button>
+            </div>
+            
+            <h4 className="text-sm font-semibold text-blue-300 mt-6 mb-3">Step Navigation</h4>
+            <div className="flex flex-wrap gap-2">
+              {problemData?.steps?.map((_, index) => (
+                <button
+                  key={index}
+                  onClick={() => handleStepChangeCommand(index + 1)}
+                  className={`px-3 py-1 rounded-full text-xs ${currentStep === index ? 'bg-blue-600' : 'bg-gray-700 hover:bg-gray-600'}`}
+                >
+                  Step {index + 1}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        {activeTab === 'context' && problemData && (
+          <div className="p-4 overflow-y-auto">
+            <h4 className="text-sm font-semibold text-blue-300 mb-3">Algorithm Information</h4>
+            
+            <div className="mb-4">
+              <h5 className="text-xs text-gray-400 mb-1">Title</h5>
+              <div className="text-sm">{problemData.title}</div>
+            </div>
+            
+            <div className="mb-4">
+              <h5 className="text-xs text-gray-400 mb-1">Description</h5>
+              <div className="text-sm">{problemData.description}</div>
+            </div>
+            
+            <div className="mb-4">
+              <h5 className="text-xs text-gray-400 mb-1">Category</h5>
+              <div className="text-sm">{problemData.category} • {problemData.difficulty}</div>
+            </div>
+            
+            <div className="mb-4">
+              <h5 className="text-xs text-gray-400 mb-1">Time Complexity</h5>
+              <div className="text-sm">
+                <div>Best: {problemData.timeComplexity.best}</div>
+                <div>Average: {problemData.timeComplexity.average}</div>
+                <div>Worst: {problemData.timeComplexity.worst}</div>
+                <div>Space: {problemData.timeComplexity.space}</div>
+              </div>
+            </div>
+            
+            {problemData.keyPoints && (
+              <div className="mb-4">
+                <h5 className="text-xs text-gray-400 mb-1">Key Points</h5>
+                <ul className="text-sm list-disc pl-5 space-y-1">
+                  {problemData.keyPoints.map((point, i) => (
+                    <li key={i}>{point}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            
+            <div className="text-xs text-gray-500 mt-4">
+              Session started: {sessionStartTime.toLocaleTimeString()}
+            </div>
+          </div>
+        )}
       </div>
     </motion.div>
   );
-};
+});
+
 
 // Visualization Components (Memoized for performance)
 const ArrayViz = React.memo(({ arrayData }) => {
@@ -942,9 +1122,18 @@ export default function AdvancedAlgorithmVisualizer() {
   const [showTutor, setShowTutor] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [userQuery, setUserQuery] = useState('');
+  const [cameraPosition, setCameraPosition] = useState([0, 0, 10]);
+  const [showCodeExecution, setShowCodeExecution] = useState(false);
+  const [highlightedCodeLine, setHighlightedCodeLine] = useState(null);
+  const [visualizationMode, setVisualizationMode] = useState('3d'); // '3d' or '2d'
+  const [showMemoryModel, setShowMemoryModel] = useState(false);
+  
   const autoPlayTimer = useRef(null);
   const controls = useAnimation();
   const containerRef = useRef(null);
+  const canvasRef = useRef(null);
+  const animationFrameRef = useRef(null);
+  const lastStepTimeRef = useRef(0);
 
   // API Configuration
   const API_KEY = import.meta.env.VITE_API_KEY;
@@ -954,14 +1143,14 @@ export default function AdvancedAlgorithmVisualizer() {
   // Enhanced prompt with strict formatting requirements
   const createVisualizationPrompt = (problem) => {
     return `Create a detailed algorithm visualization in JSON format for: ${problem}.
-    Include time complexity analysis and detailed explanations.
+    Include time complexity analysis, detailed explanations, and code execution steps.
     
     The response must be a valid JSON object with these exact properties:
     {
       "title": "Algorithm Name",
       "description": "Brief explanation",
       "difficulty": "Easy/Medium/Hard",
-      "category": "Array|Tree|Graph|LinkedList|HashTable|Recursion",
+      "category": "Array|Tree|Graph|LinkedList|HashTable|Recursion|Sorting|Searching|DP",
       "timeComplexity": {
         "best": "O(...)",
         "average": "O(...)",
@@ -970,15 +1159,29 @@ export default function AdvancedAlgorithmVisualizer() {
       },
       "keyPoints": ["Important concept 1", "Important concept 2"],
       "pseudocode": "Step-by-step pseudocode",
+      "code": {
+        "language": "python|javascript|cpp|java",
+        "content": "Actual code implementation",
+        "lineMapping": {
+          "1": "Step description for line 1",
+          "2": "Step description for line 2"
+        }
+      },
       "steps": [
         {
           "description": "Explanation of this step",
+          "codeLine": 1, // Line number being executed
           "visualElements": [
             {
-              "type": "array|tree|graph|linkedList|hashTable|recursion|text",
+              "type": "array|tree|graph|linkedList|hashTable|recursion|text|stack|queue|heap",
               // Additional properties based on type
             }
-          ]
+          ],
+          "memoryModel": {
+            "stack": [],
+            "heap": [],
+            "global": []
+          }
         }
       ]
     }
@@ -988,7 +1191,8 @@ export default function AdvancedAlgorithmVisualizer() {
       "type": "array",
       "value": [1, 2, 3],
       "highlight": [0, 2],
-      "pointers": {"left": 0, "right": 2}
+      "pointers": {"left": 0, "right": 2, "mid": 1},
+      "animation": "swap|partition|merge|traverse"
     }
 
     For tree visualization:
@@ -1002,7 +1206,8 @@ export default function AdvancedAlgorithmVisualizer() {
         {"from": 1, "to": 2}
       ],
       "highlight": [1],
-      "traversalPath": [1, 2]
+      "traversalPath": [1, 2],
+      "animation": "insert|delete|rotate|traverse"
     }
 
     For graph visualization:
@@ -1013,21 +1218,24 @@ export default function AdvancedAlgorithmVisualizer() {
         {"id": 2, "value": "B", "x": 1, "y": 1}
       ],
       "edges": [
-        {"from": 1, "to": 2}
+        {"from": 1, "to": 2, "weight": 5}
       ],
       "highlight": [1],
       "visited": [1, 2],
-      "directed": false
+      "path": [1, 2],
+      "directed": false,
+      "animation": "bfs|dfs|dijkstra|mst"
     }
 
     For linked list:
     {
       "type": "linkedList",
       "nodes": [
-        {"id": 1, "value": 5, "next": 2},
-        {"id": 2, "value": 10, "next": null}
+        {"id": 1, "value": 5, "next": 2, "prev": null},
+        {"id": 2, "value": 10, "next": null, "prev": 1}
       ],
-      "highlight": [1]
+      "highlight": [1],
+      "animation": "reverse|insert|delete|traverse"
     }
 
     For hash table:
@@ -1037,27 +1245,62 @@ export default function AdvancedAlgorithmVisualizer() {
         {"entries": [{"key": "a", "value": 1}]},
         {"entries": []}
       ],
-      "highlight": [0]
+      "highlight": [0],
+      "animation": "insert|delete|search|resize"
     }
 
     For recursion:
     {
       "type": "recursion",
       "stackFrames": [
-        {"name": "fib(5)", "variables": {"n": 5}},
-        {"name": "fib(3)", "variables": {"n": 3}}
+        {"name": "fib(5)", "variables": {"n": 5, "result": null}},
+        {"name": "fib(3)", "variables": {"n": 3, "result": null}}
       ],
-      "currentFrame": 1
+      "currentFrame": 1,
+      "animation": "push|pop|evaluate"
+    }
+
+    For stack/queue:
+    {
+      "type": "stack|queue",
+      "elements": [1, 2, 3],
+      "highlight": [2],
+      "animation": "push|pop|enqueue|dequeue"
+    }
+
+    For heap:
+    {
+      "type": "heap",
+      "elements": [10, 20, 15],
+      "highlight": [1],
+      "animation": "insert|extract|heapify"
     }
 
     For text:
     {
       "type": "text",
-      "value": "Explanation text"
+      "value": "Explanation text",
+      "animation": "typewriter|highlight"
+    }
+
+    For memory model:
+    {
+      "stack": [
+        {"frame": "main", "variables": {"x": 5}},
+        {"frame": "func", "variables": {"y": 10}}
+      ],
+      "heap": [
+        {"address": "0x123", "value": {"data": [1,2,3]}}
+      ],
+      "global": [
+        {"name": "MAX_SIZE", "value": 100}
+      ]
     }
 
     IMPORTANT: The response must be valid JSON that can be parsed directly. 
-    Include all necessary properties for the visualization to work properly.`;
+    Include all necessary properties for the visualization to work properly.
+    Add animation types where appropriate to enhance visualization.
+    Include detailed memory models for each step when relevant.`;
   };
 
   // Toggle fullscreen mode
@@ -1073,25 +1316,48 @@ export default function AdvancedAlgorithmVisualizer() {
     }
   };
 
-  // Handle autoplay with speed control
+  // Handle autoplay with smooth transitions and frame-based animation
   useEffect(() => {
     if (autoPlayTimer.current) {
       clearInterval(autoPlayTimer.current);
     }
 
     if (autoPlay && problemData?.steps) {
-      const delay = 3000 / playbackSpeed;
-      autoPlayTimer.current = setInterval(() => {
-        setCurrentStep(prev => (prev < problemData.steps.length - 1 ? prev + 1 : 0));
-      }, delay);
+      const animateStep = (timestamp) => {
+        if (!lastStepTimeRef.current) lastStepTimeRef.current = timestamp;
+        const elapsed = timestamp - lastStepTimeRef.current;
+        const delay = 3000 / playbackSpeed;
+
+        if (elapsed > delay) {
+          setCurrentStep(prev => {
+            const nextStep = prev < problemData.steps.length - 1 ? prev + 1 : 0;
+            
+            // Smooth camera transition for 3D visualizations
+            if (visualizationMode === '3d' && problemData.steps[nextStep]?.visualElements?.some(el => 
+              ['tree', 'graph', 'linkedList'].includes(el.type))) {
+              const newPosition = [
+                Math.sin(nextStep * 0.5) * 15,
+                Math.cos(nextStep * 0.3) * 5 + 5,
+                Math.cos(nextStep * 0.5) * 15
+              ];
+              setCameraPosition(newPosition);
+            }
+            
+            return nextStep;
+          });
+          lastStepTimeRef.current = timestamp;
+        }
+        animationFrameRef.current = requestAnimationFrame(animateStep);
+      };
+
+      animationFrameRef.current = requestAnimationFrame(animateStep);
     }
 
     return () => {
-      if (autoPlayTimer.current) {
-        clearInterval(autoPlayTimer.current);
-      }
+      if (autoPlayTimer.current) clearInterval(autoPlayTimer.current);
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     };
-  }, [autoPlay, problemData, playbackSpeed]);
+  }, [autoPlay, problemData, playbackSpeed, visualizationMode]);
 
   // Load history from localStorage
   useEffect(() => {
@@ -1112,6 +1378,13 @@ export default function AdvancedAlgorithmVisualizer() {
     }
   }, [visualizationHistory]);
 
+  // Handle code line highlighting based on current step
+  useEffect(() => {
+    if (problemData?.steps?.[currentStep]?.codeLine) {
+      setHighlightedCodeLine(problemData.steps[currentStep].codeLine);
+    }
+  }, [currentStep, problemData]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!problemInput.trim()) {
@@ -1124,6 +1397,7 @@ export default function AdvancedAlgorithmVisualizer() {
     setProblemData(null);
     setCurrentStep(0);
     setAutoPlay(false);
+    setHighlightedCodeLine(null);
 
     try {
       const prompt = createVisualizationPrompt(problemInput);
@@ -1181,7 +1455,8 @@ export default function AdvancedAlgorithmVisualizer() {
       
       setVisualizationHistory(prev => [newHistoryItem, ...prev.slice(0, 9)]);
       setProblemData(parsedData);
-      setShowTutor(true); // Show tutor when new visualization is loaded
+      setShowTutor(true);
+      setShowCodeExecution(!!parsedData.code);
       await controls.start("visible");
     } catch (err) {
       setError(err.message);
@@ -1192,6 +1467,7 @@ export default function AdvancedAlgorithmVisualizer() {
       if (sampleData) {
         setProblemData(sampleData);
         setShowTutor(true);
+        setShowCodeExecution(!!sampleData.code);
         setError(`Using sample data. ${err.message}`);
       }
     } finally {
@@ -1199,7 +1475,7 @@ export default function AdvancedAlgorithmVisualizer() {
     }
   };
 
-  // Enhanced sample data with time complexity analysis
+  // Enhanced sample data with animations and memory models
   const getSampleData = (problem) => {
     const samples = {
       'binary search': {
@@ -1226,144 +1502,104 @@ export default function AdvancedAlgorithmVisualizer() {
      c. if arr[mid] < target: left = mid + 1
      d. else: right = mid - 1
   3. return -1`,
+        code: {
+          language: "javascript",
+          content: `function binarySearch(arr, target) {
+  let left = 0;
+  let right = arr.length - 1;
+  
+  while (left <= right) {
+    const mid = Math.floor((left + right) / 2);
+    
+    if (arr[mid] === target) {
+      return mid;
+    } else if (arr[mid] < target) {
+      left = mid + 1;
+    } else {
+      right = mid - 1;
+    }
+  }
+  
+  return -1;
+}`,
+          lineMapping: {
+            "2": "Initialize left and right pointers",
+            "4": "Begin while loop (search continues)",
+            "5": "Calculate mid point",
+            "7": "Check if mid element is target",
+            "9": "Target is in right half",
+            "11": "Target is in left half",
+            "15": "Return -1 if not found"
+          }
+        },
         steps: [
           {
             description: "Initialize pointers at both ends of the array",
+            codeLine: 2,
             visualElements: [
               {
                 type: "array",
                 value: [1, 3, 5, 7, 9, 11, 13],
-                pointers: { left: 0, right: 6 }
+                pointers: { left: 0, right: 6 },
+                animation: "traverse"
               },
-              { type: "text", value: "Target: 7" }
-            ]
+              { 
+                type: "text", 
+                value: "Target: 7",
+                animation: "typewriter"
+              }
+            ],
+            memoryModel: {
+              stack: [
+                { frame: "binarySearch", variables: { left: 0, right: 6, target: 7 } }
+              ],
+              heap: [],
+              global: []
+            }
           },
           {
             description: "Calculate mid point (0 + 6)/2 = 3",
+            codeLine: 5,
             visualElements: [
               {
                 type: "array",
                 value: [1, 3, 5, 7, 9, 11, 13],
-                pointers: { left: 0, right: 6, mid: 3 }
+                pointers: { left: 0, right: 6, mid: 3 },
+                animation: "highlight"
               }
-            ]
+            ],
+            memoryModel: {
+              stack: [
+                { frame: "binarySearch", variables: { left: 0, right: 6, mid: 3, target: 7 } }
+              ],
+              heap: [],
+              global: []
+            }
           },
           {
-            description: "Found target at index 3!",
+            description: "Compare arr[3] (7) with target (7) - match found!",
+            codeLine: 7,
             visualElements: [
               {
                 type: "array",
                 value: [1, 3, 5, 7, 9, 11, 13],
                 highlight: [3],
-                pointers: { mid: 3 }
+                pointers: { mid: 3 },
+                animation: "highlight"
               },
-              { type: "text", value: "Found 7 at index 3" }
-            ]
-          }
-        ]
-      },
-      'tree traversal': {
-        title: 'Tree Traversal',
-        description: 'Depth-first search (DFS) traversal of a binary tree. Visits nodes by going as deep as possible along each branch before backtracking. Can be implemented using recursion or an explicit stack.',
-        difficulty: 'Medium',
-        category: 'Tree',
-        timeComplexity: {
-          best: 'O(n)',
-          average: 'O(n)',
-          worst: 'O(n)',
-          space: 'O(h)' // h is height of tree
-        },
-        keyPoints: [
-          "Visits all nodes in depth-first order",
-          "Can be pre-order, in-order, or post-order",
-          "Uses stack (either call stack or explicit)"
-        ],
-        pseudocode: `function dfs(node):
-  1. if node is null: return
-  2. visit(node)  // Pre-order
-  3. dfs(node.left)
-  4. dfs(node.right)`,
-        steps: [
-          {
-            description: "Start at root node (50)",
-            visualElements: [
-              {
-                type: "tree",
-                nodes: [
-                  { id: 1, value: 50, x: 0, y: 0 },
-                  { id: 2, value: 30, x: -1, y: -1 },
-                  { id: 3, value: 70, x: 1, y: -1 },
-                  { id: 4, value: 20, x: -1.5, y: -2 },
-                  { id: 5, value: 40, x: -0.5, y: -2 },
-                  { id: 6, value: 60, x: 0.5, y: -2 },
-                  { id: 7, value: 80, x: 1.5, y: -2 }
-                ],
-                edges: [
-                  { from: 1, to: 2 },
-                  { from: 1, to: 3 },
-                  { from: 2, to: 4 },
-                  { from: 2, to: 5 },
-                  { from: 3, to: 6 },
-                  { from: 3, to: 7 }
-                ],
-                highlight: [1],
-                traversalPath: [1]
+              { 
+                type: "text", 
+                value: "Found 7 at index 3",
+                animation: "typewriter"
               }
-            ]
-          },
-          {
-            description: "Visit left child (30)",
-            visualElements: [
-              {
-                type: "tree",
-                nodes: [
-                  { id: 1, value: 50, x: 0, y: 0 },
-                  { id: 2, value: 30, x: -1, y: -1 },
-                  { id: 3, value: 70, x: 1, y: -1 },
-                  { id: 4, value: 20, x: -1.5, y: -2 },
-                  { id: 5, value: 40, x: -0.5, y: -2 },
-                  { id: 6, value: 60, x: 0.5, y: -2 },
-                  { id: 7, value: 80, x: 1.5, y: -2 }
-                ],
-                edges: [
-                  { from: 1, to: 2 },
-                  { from: 1, to: 3 },
-                  { from: 2, to: 4 },
-                  { from: 2, to: 5 },
-                  { from: 3, to: 6 },
-                  { from: 3, to: 7 }
-                ],
-                highlight: [2],
-                traversalPath: [1, 2]
-              }
-            ]
-          },
-          {
-            description: "Visit leftmost node (20)",
-            visualElements: [
-              {
-                type: "tree",
-                nodes: [
-                  { id: 1, value: 50, x: 0, y: 0 },
-                  { id: 2, value: 30, x: -1, y: -1 },
-                  { id: 3, value: 70, x: 1, y: -1 },
-                  { id: 4, value: 20, x: -1.5, y: -2 },
-                  { id: 5, value: 40, x: -0.5, y: -2 },
-                  { id: 6, value: 60, x: 0.5, y: -2 },
-                  { id: 7, value: 80, x: 1.5, y: -2 }
-                ],
-                edges: [
-                  { from: 1, to: 2 },
-                  { from: 1, to: 3 },
-                  { from: 2, to: 4 },
-                  { from: 2, to: 5 },
-                  { from: 3, to: 6 },
-                  { from: 3, to: 7 }
-                ],
-                highlight: [4],
-                traversalPath: [1, 2, 4]
-              }
-            ]
+            ],
+            memoryModel: {
+              stack: [
+                { frame: "binarySearch", variables: { left: 0, right: 6, mid: 3, target: 7, result: 3 } }
+              ],
+              heap: [],
+              global: []
+            }
           }
         ]
       },
@@ -1371,7 +1607,7 @@ export default function AdvancedAlgorithmVisualizer() {
         title: 'Quick Sort',
         description: 'Divide and conquer algorithm that works by selecting a "pivot" element and partitioning the array around the pivot. Elements smaller than the pivot come before, elements larger come after. Then recursively sort the sub-arrays.',
         difficulty: 'Medium',
-        category: 'Array',
+        category: 'Sorting',
         timeComplexity: {
           best: 'O(n log n)',
           average: 'O(n log n)',
@@ -1398,41 +1634,291 @@ function partition(arr, low, high):
         swap(arr[i], arr[j])
   4. swap(arr[i + 1], arr[high])
   5. return i + 1`,
+        code: {
+          language: "javascript",
+          content: `function quickSort(arr, low = 0, high = arr.length - 1) {
+  if (low < high) {
+    const pivot = partition(arr, low, high);
+    quickSort(arr, low, pivot - 1);
+    quickSort(arr, pivot + 1, high);
+  }
+  return arr;
+}
+
+function partition(arr, low, high) {
+  const pivot = arr[high];
+  let i = low - 1;
+  
+  for (let j = low; j < high; j++) {
+    if (arr[j] < pivot) {
+      i++;
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+  }
+  
+  [arr[i + 1], arr[high]] = [arr[high], arr[i + 1]];
+  return i + 1;
+}`,
+          lineMapping: {
+            "2": "Check if subarray has more than one element",
+            "3": "Partition the array and get pivot index",
+            "4": "Recursively sort left subarray",
+            "5": "Recursively sort right subarray",
+            "10": "Select last element as pivot",
+            "11": "Initialize partition index",
+            "13": "Loop through subarray",
+            "14": "Check if current element is less than pivot",
+            "15": "Increment partition index",
+            "16": "Swap elements",
+            "20": "Swap pivot into correct position",
+            "21": "Return pivot index"
+          }
+        },
         steps: [
           {
             description: "Initial array and select last element as pivot",
+            codeLine: 10,
             visualElements: [
               {
                 type: "array",
                 value: [10, 80, 30, 90, 40, 50, 70],
                 highlight: [6],
-                pointers: { pivot: 6 }
+                pointers: { pivot: 6, i: -1, j: 0 },
+                animation: "highlight"
               },
-              { type: "text", value: "Pivot selected: 70" }
-            ]
+              { 
+                type: "text", 
+                value: "Pivot selected: 70",
+                animation: "typewriter"
+              }
+            ],
+            memoryModel: {
+              stack: [
+                { 
+                  frame: "quickSort", 
+                  variables: { arr: "[10,80,30,90,40,50,70]", low: 0, high: 6 } 
+                },
+                { 
+                  frame: "partition", 
+                  variables: { arr: "[10,80,30,90,40,50,70]", low: 0, high: 6, pivot: 70, i: -1, j: 0 } 
+                }
+              ],
+              heap: [],
+              global: []
+            }
           },
           {
             description: "Partitioning: Move elements smaller than pivot to left",
+            codeLine: 16,
             visualElements: [
               {
                 type: "array",
                 value: [10, 30, 40, 50, 80, 90, 70],
                 highlight: [0, 1, 2, 3],
-                pointers: { i: 3, j: 6 }
+                pointers: { pivot: 6, i: 3, j: 6 },
+                animation: "swap"
               }
-            ]
+            ],
+            memoryModel: {
+              stack: [
+                { 
+                  frame: "quickSort", 
+                  variables: { arr: "[10,30,40,50,80,90,70]", low: 0, high: 6 } 
+                },
+                { 
+                  frame: "partition", 
+                  variables: { arr: "[10,30,40,50,80,90,70]", low: 0, high: 6, pivot: 70, i: 3, j: 6 } 
+                }
+              ],
+              heap: [],
+              global: []
+            }
           },
           {
             description: "Swap pivot with first element greater than pivot",
+            codeLine: 20,
             visualElements: [
               {
                 type: "array",
                 value: [10, 30, 40, 50, 70, 90, 80],
                 highlight: [4],
-                pointers: { pivot: 4 }
+                pointers: { pivot: 4 },
+                animation: "swap"
               },
-              { type: "text", value: "Pivot 70 now in correct position" }
-            ]
+              { 
+                type: "text", 
+                value: "Pivot 70 now in correct position",
+                animation: "typewriter"
+              }
+            ],
+            memoryModel: {
+              stack: [
+                { 
+                  frame: "quickSort", 
+                  variables: { arr: "[10,30,40,50,70,90,80]", low: 0, high: 6 } 
+                },
+                { 
+                  frame: "partition", 
+                  variables: { arr: "[10,30,40,50,70,90,80]", low: 0, high: 6, pivot: 70, i: 3, j: 6, returnValue: 4 } 
+                }
+              ],
+              heap: [],
+              global: []
+            }
+          }
+        ]
+      },
+      'tree traversal': {
+        title: 'Tree Traversal',
+        description: 'Depth-first search (DFS) traversal of a binary tree. Visits nodes by going as deep as possible along each branch before backtracking. Can be implemented using recursion or an explicit stack.',
+        difficulty: 'Medium',
+        category: 'Tree',
+        timeComplexity: {
+          best: 'O(n)',
+          average: 'O(n)',
+          worst: 'O(n)',
+          space: 'O(h)' // h is height of tree
+        },
+        keyPoints: [
+          "Visits all nodes in depth-first order",
+          "Can be pre-order, in-order, or post-order",
+          "Uses stack (either call stack or explicit)"
+        ],
+        pseudocode: `function dfs(node):
+  1. if node is null: return
+  2. visit(node)  // Pre-order
+  3. dfs(node.left)
+  4. dfs(node.right)`,
+        code: {
+          language: "javascript",
+          content: `function dfs(node) {
+  if (!node) return;
+  
+  // Pre-order visit
+  console.log(node.value);
+  
+  // Recursively traverse left and right
+  dfs(node.left);
+  dfs(node.right);
+}`,
+          lineMapping: {
+            "2": "Base case: if node is null, return",
+            "5": "Visit current node (pre-order)",
+            "8": "Recursively traverse left subtree",
+            "9": "Recursively traverse right subtree"
+          }
+        },
+        steps: [
+          {
+            description: "Start at root node (50)",
+            codeLine: 5,
+            visualElements: [
+              {
+                type: "tree",
+                nodes: [
+                  { id: 1, value: 50, x: 0, y: 0 },
+                  { id: 2, value: 30, x: -1, y: -1 },
+                  { id: 3, value: 70, x: 1, y: -1 },
+                  { id: 4, value: 20, x: -1.5, y: -2 },
+                  { id: 5, value: 40, x: -0.5, y: -2 },
+                  { id: 6, value: 60, x: 0.5, y: -2 },
+                  { id: 7, value: 80, x: 1.5, y: -2 }
+                ],
+                edges: [
+                  { from: 1, to: 2 },
+                  { from: 1, to: 3 },
+                  { from: 2, to: 4 },
+                  { from: 2, to: 5 },
+                  { from: 3, to: 6 },
+                  { from: 3, to: 7 }
+                ],
+                highlight: [1],
+                traversalPath: [1],
+                animation: "highlight"
+              }
+            ],
+            memoryModel: {
+              stack: [
+                { frame: "dfs", variables: { node: "root(50)" } }
+              ],
+              heap: [],
+              global: []
+            }
+          },
+          {
+            description: "Visit left child (30)",
+            codeLine: 8,
+            visualElements: [
+              {
+                type: "tree",
+                nodes: [
+                  { id: 1, value: 50, x: 0, y: 0 },
+                  { id: 2, value: 30, x: -1, y: -1 },
+                  { id: 3, value: 70, x: 1, y: -1 },
+                  { id: 4, value: 20, x: -1.5, y: -2 },
+                  { id: 5, value: 40, x: -0.5, y: -2 },
+                  { id: 6, value: 60, x: 0.5, y: -2 },
+                  { id: 7, value: 80, x: 1.5, y: -2 }
+                ],
+                edges: [
+                  { from: 1, to: 2 },
+                  { from: 1, to: 3 },
+                  { from: 2, to: 4 },
+                  { from: 2, to: 5 },
+                  { from: 3, to: 6 },
+                  { from: 3, to: 7 }
+                ],
+                highlight: [2],
+                traversalPath: [1, 2],
+                animation: "traverse"
+              }
+            ],
+            memoryModel: {
+              stack: [
+                { frame: "dfs", variables: { node: "root(50)" } },
+                { frame: "dfs", variables: { node: "node(30)" } }
+              ],
+              heap: [],
+              global: []
+            }
+          },
+          {
+            description: "Visit leftmost node (20)",
+            codeLine: 5,
+            visualElements: [
+              {
+                type: "tree",
+                nodes: [
+                  { id: 1, value: 50, x: 0, y: 0 },
+                  { id: 2, value: 30, x: -1, y: -1 },
+                  { id: 3, value: 70, x: 1, y: -1 },
+                  { id: 4, value: 20, x: -1.5, y: -2 },
+                  { id: 5, value: 40, x: -0.5, y: -2 },
+                  { id: 6, value: 60, x: 0.5, y: -2 },
+                  { id: 7, value: 80, x: 1.5, y: -2 }
+                ],
+                edges: [
+                  { from: 1, to: 2 },
+                  { from: 1, to: 3 },
+                  { from: 2, to: 4 },
+                  { from: 2, to: 5 },
+                  { from: 3, to: 6 },
+                  { from: 3, to: 7 }
+                ],
+                highlight: [4],
+                traversalPath: [1, 2, 4],
+                animation: "highlight"
+              }
+            ],
+            memoryModel: {
+              stack: [
+                { frame: "dfs", variables: { node: "root(50)" } },
+                { frame: "dfs", variables: { node: "node(30)" } },
+                { frame: "dfs", variables: { node: "node(20)" } }
+              ],
+              heap: [],
+              global: []
+            }
           }
         ]
       }
@@ -1455,7 +1941,18 @@ function partition(arr, low, high):
         transition={{ duration: 0.5 }}
       >
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-xl font-semibold text-white">Interactive Visualization</h3>
+          <div className="flex items-center space-x-4">
+            <h3 className="text-xl font-semibold text-white">Interactive Visualization</h3>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => setVisualizationMode(prev => prev === '3d' ? '2d' : '3d')}
+                className="p-2 bg-gray-700 rounded hover:bg-gray-600 text-xs"
+                title={`Switch to ${visualizationMode === '3d' ? '2D' : '3D'} view`}
+              >
+                {visualizationMode === '3d' ? '3D' : '2D'} View
+              </button>
+            </div>
+          </div>
           <div className="flex space-x-2">
             <button
               onClick={() => setShowHelp(!showHelp)}
@@ -1511,9 +2008,11 @@ function partition(arr, low, high):
                 <li>Use the play/pause buttons to control animation</li>
                 <li>Adjust speed with the dropdown menu</li>
                 <li>Click on step indicators to jump to specific steps</li>
-                <li>Rotate the view by dragging the visualization</li>
+                <li>Rotate the 3D view by dragging the visualization</li>
                 <li>Zoom in/out with mouse wheel or pinch gesture</li>
+                <li>Toggle between 2D and 3D visualization modes</li>
                 <li>Click the robot icon to interact with the AI tutor</li>
+                <li>View memory model to see stack and heap state</li>
               </ul>
             </motion.div>
           )}
@@ -1591,13 +2090,18 @@ function partition(arr, low, high):
         <div className="w-full h-96 md:h-[500px] bg-gray-900 rounded-xl overflow-hidden relative">
           {step.visualElements.length > 0 ? (
             <Canvas 
-              camera={{ position: [0, 0, 10], fov: 50 }}
+              ref={canvasRef}
+              camera={{ position: cameraPosition, fov: 50 }}
               gl={{ antialias: true, powerPreference: "high-performance" }}
               frameloop={autoPlay ? "always" : "demand"}
             >
+              <OrbitControls enableZoom={true} enablePan={true} enableRotate={visualizationMode === '3d'} />
+              <ambientLight intensity={0.5} />
+              <pointLight position={[10, 10, 10]} />
               <DataStructureVisualizer 
                 elements={step.visualElements} 
-                category={problemData.category} 
+                category={problemData.category}
+                mode={visualizationMode}
               />
             </Canvas>
           ) : (
@@ -1609,6 +2113,126 @@ function partition(arr, low, high):
             </div>
           )}
         </div>
+
+        {/* Code Execution Panel */}
+        {showCodeExecution && problemData.code && (
+          <motion.div
+            className="mt-4 bg-gray-800 rounded-lg overflow-hidden"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+          >
+            <div className="p-3 bg-gray-700 flex justify-between items-center">
+              <h4 className="font-medium">Code Execution</h4>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs px-2 py-1 bg-gray-600 rounded">{problemData.code.language}</span>
+                <button 
+                  onClick={() => setShowMemoryModel(!showMemoryModel)}
+                  className="text-xs px-2 py-1 bg-gray-600 rounded hover:bg-gray-500"
+                >
+                  {showMemoryModel ? 'Hide Memory' : 'Show Memory'}
+                </button>
+              </div>
+            </div>
+            <div className="relative">
+              <pre className="bg-gray-900 p-4 overflow-x-auto text-gray-300 text-sm">
+                {problemData.code.content.split('\n').map((line, index) => {
+                  const lineNumber = index + 1;
+                  const isHighlighted = highlightedCodeLine === lineNumber;
+                  const stepDescription = problemData.code.lineMapping[lineNumber];
+                  
+                  return (
+                    <div 
+                      key={index}
+                      className={`flex ${isHighlighted ? 'bg-blue-900/30' : ''}`}
+                    >
+                      <div className="w-8 text-right pr-2 text-gray-500 select-none">{lineNumber}</div>
+                      <div className="flex-1">
+                        <code className={isHighlighted ? 'text-yellow-300' : ''}>{line}</code>
+                        {isHighlighted && stepDescription && (
+                          <motion.div
+                            className="text-xs text-gray-400 mt-1 mb-2 pl-4"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                          >
+                            {stepDescription}
+                          </motion.div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </pre>
+            </div>
+
+            {/* Memory Model Visualization */}
+            {showMemoryModel && step.memoryModel && (
+              <motion.div
+                className="p-4 bg-gray-700/50"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+              >
+                <h5 className="text-sm font-medium mb-2 text-blue-300">Memory Model</h5>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                  {/* Stack Visualization */}
+                  <div className="bg-gray-800 p-3 rounded">
+                    <div className="font-mono text-green-400 mb-2">Call Stack</div>
+                    <div className="space-y-2">
+                      {step.memoryModel.stack.map((frame, idx) => (
+                        <div key={idx} className="border-l-2 border-green-500 pl-2">
+                          <div className="font-mono text-gray-300">{frame.frame}</div>
+                          {Object.entries(frame.variables).map(([varName, varValue]) => (
+                            <div key={varName} className="ml-2 text-gray-400">
+                              <span className="text-purple-300">{varName}</span>: {JSON.stringify(varValue)}
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Heap Visualization */}
+                  <div className="bg-gray-800 p-3 rounded">
+                    <div className="font-mono text-yellow-400 mb-2">Heap</div>
+                    {step.memoryModel.heap.length > 0 ? (
+                      <div className="space-y-2">
+                        {step.memoryModel.heap.map((item, idx) => (
+                          <div key={idx} className="border-l-2 border-yellow-500 pl-2">
+                            <div className="font-mono text-gray-300">{item.address}</div>
+                            <div className="ml-2 text-gray-400">
+                              {JSON.stringify(item.value)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-gray-500 italic">No heap allocations</div>
+                    )}
+                  </div>
+
+                  {/* Global Variables */}
+                  <div className="bg-gray-800 p-3 rounded">
+                    <div className="font-mono text-blue-400 mb-2">Global</div>
+                    {step.memoryModel.global.length > 0 ? (
+                      <div className="space-y-2">
+                        {step.memoryModel.global.map((item, idx) => (
+                          <div key={idx} className="border-l-2 border-blue-500 pl-2">
+                            <div className="font-mono text-gray-300">{item.name}</div>
+                            <div className="ml-2 text-gray-400">
+                              {JSON.stringify(item.value)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-gray-500 italic">No global variables</div>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </motion.div>
+        )}
 
         {/* Controls */}
         <div className="flex justify-between items-center mt-4">
@@ -1641,17 +2265,19 @@ function partition(arr, low, high):
             </button>
           </div>
           
-          <select
-            value={playbackSpeed}
-            onChange={(e) => setPlaybackSpeed(Number(e.target.value))}
-            className="bg-gray-700 text-white p-2 rounded text-sm"
-          >
-            <option value={0.5}>0.5x Speed</option>
-            <option value={1}>1x Speed</option>
-            <option value={1.5}>1.5x Speed</option>
-            <option value={2}>2x Speed</option>
-            <option value={3}>3x Speed</option>
-          </select>
+          <div className="flex items-center space-x-4">
+            <select
+              value={playbackSpeed}
+              onChange={(e) => setPlaybackSpeed(Number(e.target.value))}
+              className="bg-gray-700 text-white p-2 rounded text-sm"
+            >
+              <option value={0.5}>0.5x Speed</option>
+              <option value={1}>1x Speed</option>
+              <option value={1.5}>1.5x Speed</option>
+              <option value={2}>2x Speed</option>
+              <option value={3}>3x Speed</option>
+            </select>
+          </div>
         </div>
 
         {/* Step indicators */}
@@ -1719,6 +2345,7 @@ function partition(arr, low, high):
                           setProblemData(item.data);
                           setShowHistoryPanel(false);
                           setShowTutor(true);
+                          setShowCodeExecution(!!item.data.code);
                         }}
                         className="w-full text-left p-3 hover:bg-gray-700 rounded-lg transition-colors flex items-center"
                       >
@@ -1842,6 +2469,18 @@ function partition(arr, low, high):
                   >
                     Hash Table
                   </button>
+                  <button
+                    onClick={() => setProblemInput('Dijkstra Algorithm')}
+                    className="p-2 bg-gray-700 rounded text-sm hover:bg-gray-600 transition-colors"
+                  >
+                    Dijkstra
+                  </button>
+                  <button
+                    onClick={() => setProblemInput('Dynamic Programming')}
+                    className="p-2 bg-gray-700 rounded text-sm hover:bg-gray-600 transition-colors"
+                  >
+                    DP
+                  </button>
                 </div>
               </div>
             </motion.div>
@@ -1899,6 +2538,16 @@ function partition(arr, low, high):
                   >
                     Pseudocode
                   </button>
+                  {problemData.code && (
+                    <button
+                      onClick={() => setActiveTab('code')}
+                      className={`px-6 py-4 font-medium ${
+                        activeTab === 'code' ? 'bg-gray-700 text-blue-400' : 'text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      Code
+                    </button>
+                  )}
                 </div>
 
                 <div className="p-6">
@@ -1984,6 +2633,30 @@ function partition(arr, low, high):
                       </pre>
                     </motion.div>
                   )}
+
+                  {activeTab === 'code' && problemData.code && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ duration: 0.3 }}
+                    >
+                      <h3 className="text-xl font-semibold mb-4">Code Implementation</h3>
+                      <div className="mb-4 flex items-center">
+                        <span className="text-sm px-2 py-1 bg-gray-700 rounded mr-2">
+                          {problemData.code.language}
+                        </span>
+                        <button 
+                          onClick={() => setShowCodeExecution(!showCodeExecution)}
+                          className="text-sm px-2 py-1 bg-blue-600 rounded hover:bg-blue-700"
+                        >
+                          {showCodeExecution ? 'Hide Execution' : 'Show Execution'}
+                        </button>
+                      </div>
+                      <pre className="bg-gray-900 p-4 rounded-lg overflow-x-auto text-gray-300 text-sm md:text-base">
+                        {problemData.code.content}
+                      </pre>
+                    </motion.div>
+                  )}
                 </div>
               </motion.div>
             )}
@@ -2005,6 +2678,8 @@ function partition(arr, low, high):
                     <li>• Describe graph algorithms like Dijkstra's or BFS</li>
                     <li>• Explore data structures like Trees or Hash Tables</li>
                     <li>• Get explanations from the AI tutor after visualization</li>
+                    <li>• View real-time code execution and memory models</li>
+                    <li>• Switch between 2D and 3D visualization modes</li>
                   </ul>
                 </div>
               </motion.div>
